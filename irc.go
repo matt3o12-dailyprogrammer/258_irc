@@ -9,8 +9,11 @@ const (
 	CRLF = "\r\n"
 )
 
+// Called when a new event is fired (e.g. a message is recieved
 type EventCallback func(message string) bool
 
+// The Client that containing the usernames, hostname, socket (if connected)
+// and events.
 type Client struct {
 	// The hostname and port formatted like this:
 	// domain:port
@@ -27,6 +30,8 @@ type Client struct {
 	events map[string][]EventCallback
 }
 
+// NewClient returns a new client, with an inizilized events map, and the given
+// names.
 func NewClient(hostname, nickname, username, realname string) *Client {
 	return &Client{
 		Hostname: hostname,
@@ -37,10 +42,13 @@ func NewClient(hostname, nickname, username, realname string) *Client {
 	}
 }
 
+// NewClientShort creates a new client but uses user name for the nickname
+// username, and realname.
 func NewClientShort(hostname, user string) *Client {
 	return NewClient(hostname, user, user, user)
 }
 
+// Connects to the IRC server. Returns network errors if any occured.
 func (s *Client) Connect() error {
 	addr, err := net.ResolveTCPAddr("tcp", s.Hostname)
 	if err != nil {
@@ -57,6 +65,7 @@ func (s *Client) Connect() error {
 	return err
 }
 
+// RegisterEvent registers a new event
 func (s *Client) RegisterEvent(name string, back EventCallback) {
 	s.events[name] = append(s.events[name], back)
 }
@@ -91,10 +100,16 @@ func (s *Client) sendMessage(params ...string) (int, error) {
 	return s.socket.Write([]byte(msg + CRLF))
 }
 
+// Connected returns true when the server is connected. Warning: the server
+// might already have dropped the connection but the TCP connections is still
+// valid (because a read hasn't been called). In this case, this method will
+// return false.
 func (s *Client) Connected() bool {
 	return s.socket != nil
 }
 
+// Close tries to close the TCP connection. If there was an error, the
+// connection is left as the TCP socket left it.
 func (s *Client) Close() error {
 	if s.socket != nil {
 		err := s.socket.Close()
