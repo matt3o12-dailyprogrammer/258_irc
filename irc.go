@@ -3,6 +3,7 @@ package irc
 import (
 	"net"
 	"strings"
+	"sync"
 )
 
 const (
@@ -27,7 +28,8 @@ type Client struct {
 	sendCh      chan string
 	closeSendCh chan bool
 
-	//TODO: Add lock when connecting/disconnecting.
+	eventLock   sync.RWMutex
+	connectLock sync.Mutex
 }
 
 // NewClient returns a new client, with an inizilized events map, and the given
@@ -66,6 +68,9 @@ func (s *Client) messageListener() {
 
 // Connects to the IRC server. Returns network errors if any occured.
 func (s *Client) Connect() error {
+	s.connectLock.Lock()
+	defer s.connectLock.Unlock()
+
 	addr, err := net.ResolveTCPAddr("tcp", s.Hostname)
 	if err != nil {
 		return err
@@ -89,7 +94,9 @@ func (s *Client) Connect() error {
 
 // RegisterEvent registers a new event
 func (s *Client) RegisterEvent(name string, back EventCallback) {
+	s.eventLock.Lock()
 	s.events[name] = append(s.events[name], back)
+	s.eventLock.Unlock()
 }
 
 // SendMessage schedules a message to get sent.
@@ -120,6 +127,8 @@ func (s *Client) FireEvent(message string) {
 	}
 
 	event := strings.SplitN(message, " ", 2)[0]
+	s.eventLock.RLock()
+	defer s.eventLock.RUnlock()
 	for _, handler := range s.events[event] {
 		if handler(message) {
 			return
@@ -152,6 +161,9 @@ func (s *Client) Connected() bool {
 // Close tries to close the TCP connection. If there was an error, the
 // connection is left as the TCP socket left it.
 func (s *Client) Close() error {
+	s.connectLock.Lock()
+	defer s.connectLock.Unlock()
+
 	if s.socket != nil {
 		err := s.socket.Close()
 		if err == nil {
