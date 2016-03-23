@@ -1,6 +1,8 @@
 package irc
 
 import (
+	"bufio"
+	"log"
 	"net"
 	"strings"
 	"sync"
@@ -50,6 +52,20 @@ func NewClientShort(hostname, user string) *Client {
 	return NewClient(hostname, user, user, user)
 }
 
+func (c *Client) messageReceiver() {
+	scanner := bufio.NewScanner(c.socket)
+	for scanner.Scan() {
+		if t := strings.TrimSpace(scanner.Text()); t != "" {
+			c.FireEvent(t)
+		}
+	}
+
+	// There was an error and the server is not closed.
+	if err := scanner.Err(); err != nil && c.Connected() {
+		c.closeError(err)
+	}
+}
+
 func (s *Client) messageListener() {
 	for {
 		select {
@@ -58,8 +74,7 @@ func (s *Client) messageListener() {
 
 		case msg := <-s.sendCh:
 			if _, err := s.sendMessage(msg); err != nil {
-				s.lastErr = err
-				s.Close()
+				s.closeError(err)
 			}
 
 		}
@@ -88,8 +103,17 @@ func (s *Client) Connect() error {
 
 	s.sendCh = make(chan string)
 	s.closeSendCh = make(chan bool)
+	s.RegisterEvent("PING", s.pingResponder)
 	go s.messageListener()
-	return err
+	go s.messageReceiver()
+	return nil
+}
+
+func (c *Client) pingResponder(m string) bool {
+	message := m[5:] // 'PING ' is 5 characters
+	c.SendMessage("PONG " + message)
+
+	return true
 }
 
 // RegisterEvent registers a new event
@@ -156,6 +180,14 @@ func (s *Client) sendMessage(params ...string) (int, error) {
 // return false.
 func (s *Client) Connected() bool {
 	return s.socket != nil
+}
+
+func (c *Client) closeError(err error) {
+	log.Printf("Shutting down due to error: %q.\n", err)
+	c.lastErr = err
+	if err := c.Close(); err != nil {
+		log.Printf("While shutting down, another error occured: %q\n", err)
+	}
 }
 
 // Close tries to close the TCP connection. If there was an error, the

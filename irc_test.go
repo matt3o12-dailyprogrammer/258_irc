@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"io"
+	"io/ioutil"
 	"net"
 	"testing"
 	"time"
@@ -132,6 +133,14 @@ func connectClient(t *testing.T) (*net.TCPConn, *Client) {
 	return conn, client
 }
 
+func endTransmission(t *testing.T, client *Client, conn io.Reader) {
+	if err := client.Close(); err != nil {
+		t.Errorf("Could not close connection. Got error: %v", err)
+	}
+
+	assertEndTransmition(t, conn)
+}
+
 func assertEndTransmition(t *testing.T, conn io.Reader) {
 	scanner := bufio.NewScanner(conn)
 	if b := scanner.Scan(); b {
@@ -252,4 +261,30 @@ func TestFireEventEmptyMessage(t *testing.T) {
 	}()
 
 	NewClientShort("", "").FireEvent("")
+}
+
+func TestRespondeToPing(t *testing.T) {
+	testcase := []struct {
+		in, out string
+	}{
+		{"PING :hello world", "PONG :hello world"},
+		{"PING :foo bar", "PONG :foo bar"},
+		{"PING :wolfe.freenode.net", "PONG :wolfe.freenode.net"},
+	}
+
+	for _, test := range testcase {
+		in, out := test.in+CRLF, test.out+CRLF
+		conn, server := connectClient(t)
+		io.WriteString(conn, in)
+
+		data, err := ioutil.ReadAll(conn)
+		if err, ok := err.(net.Error); !ok || !err.Timeout() {
+			t.Errorf("Expected to get read timeout, got: %v", err)
+		} else if data := string(data); data != out {
+			msg := "Expected to get response: %q, got %q instead"
+			t.Errorf(msg, out, data)
+		}
+
+		endTransmission(t, server, conn)
+	}
 }
