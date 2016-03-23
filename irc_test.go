@@ -2,6 +2,7 @@ package irc
 
 import (
 	"bufio"
+	"bytes"
 	"io"
 	"net"
 	"testing"
@@ -46,7 +47,7 @@ func getClient(t *testing.T) (*net.TCPListener, *Client) {
 }
 
 func longTest(t *testing.T) {
-	if !testing.Short() {
+	if testing.Short() {
 		t.Skip("Skipping, test might take a while.")
 	}
 }
@@ -84,6 +85,26 @@ func TestClientConnect(t *testing.T) {
 }
 
 func TestClientClose(t *testing.T) {
+	conn, client := connectClient(t)
+	if !client.Connected() {
+		t.Error("Client returns it is not connected although the " +
+			"TCP connection was already espablished.")
+	}
+
+	client.Close()
+	conn.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+	if _, err := conn.Read(make([]byte, 1)); err != io.EOF {
+		msg := "Connection still open expected to be closed. " +
+			"Got error: %v instead."
+		t.Errorf(msg, err)
+	}
+
+	if client.Connected() {
+		t.Error("Connected still returns true, expected false.")
+	}
+}
+
+func connectClient(t *testing.T) (*net.TCPConn, *Client) {
 	longTest(t)
 
 	listener, client := getClient(t)
@@ -94,25 +115,53 @@ func TestClientClose(t *testing.T) {
 	client.Connect()
 
 	conn, err := listener.AcceptTCP()
+	conn.SetReadDeadline(time.Now().Add(time.Millisecond * 100))
 	handleError(t, err, "Error accepting TCP connection. "+
 		"probably did not responde. %v")
 
-	if !client.Connected() {
-		t.Error("Client returns it is not connected although the " +
-			"TCP connection was already espablished.")
+	hello := []byte("NICK testa" + CRLF + "USER test_user 0 * :A Tester" + CRLF)
+	got := make([]byte, len(hello))
+	if _, err := conn.Read(got); err != nil {
+		t.Fatalf("Error while reading init message: %v", err)
+	} else if !bytes.Equal(got, hello) {
+		msg := "Expected to get: %q; got: %q"
+		t.Fatalf(msg, string(hello), string(got))
 	}
 
-	client.Close()
-	conn.SetReadDeadline(time.Now())
-	if _, err := conn.Read(make([]byte, 1)); err != io.EOF {
-		msg := "Connection still open expected to be closed. " +
-			"Got error: %v instead."
-		t.Errorf(msg, err)
-	}
+	conn.SetReadDeadline(time.Now().Add(time.Millisecond * 250))
+	return conn, client
+}
 
-	if client.Connected() {
-		t.Error("Connected still returns true, expected false.")
+func assertEndTransmition(t *testing.T, conn io.Reader) {
+	scanner := bufio.NewScanner(conn)
+	if b := scanner.Scan(); b {
+		msg := "Expected connection to stop transmitting, got: %v"
+		t.Errorf(msg, scanner.Text())
+	} else if err, ok := scanner.Err().(net.Error); !ok || !err.Timeout() {
+		msg := "Expected to get a timeout error, got: %v"
+		t.Errorf(msg, scanner.Err())
 	}
+}
+
+func TestSendMessage(t *testing.T) {
+	conn, client := connectClient(t)
+	client.SendMessage("hello world")
+	client.SendMessage("does it work??")
+
+	expected := []string{"hello world", "does it work??"}
+	scanner := bufio.NewScanner(conn)
+	for i, line := range expected {
+		if !scanner.Scan() {
+			t.Errorf("Scanner ended after %v iteration.", i)
+			break
+		}
+
+		if scanner.Text() != line {
+			msg := "Expected to transmite: %v; got: %v"
+			t.Errorf(msg, line, scanner.Text())
+		}
+	}
+	assertEndTransmition(t, conn)
 }
 
 func TestNewClientShort(t *testing.T) {

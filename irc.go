@@ -17,17 +17,17 @@ type EventCallback func(message string) bool
 type Client struct {
 	// The hostname and port formatted like this:
 	// domain:port
-	Hostname string
+	Hostname    string
+	Nickname    string
+	Username    string
+	RealName    string
+	socket      *net.TCPConn
+	events      map[string][]EventCallback
+	lastErr     error
+	sendCh      chan string
+	closeSendCh chan bool
 
-	Nickname string
-
-	Username string
-
-	RealName string
-
-	socket *net.TCPConn
-
-	events map[string][]EventCallback
+	//TODO: Add lock when connecting/disconnecting.
 }
 
 // NewClient returns a new client, with an inizilized events map, and the given
@@ -48,6 +48,22 @@ func NewClientShort(hostname, user string) *Client {
 	return NewClient(hostname, user, user, user)
 }
 
+func (s *Client) messageListener() {
+	for {
+		select {
+		case <-s.closeSendCh:
+			return
+
+		case msg := <-s.sendCh:
+			if _, err := s.sendMessage(msg); err != nil {
+				s.lastErr = err
+				s.Close()
+			}
+
+		}
+	}
+}
+
 // Connects to the IRC server. Returns network errors if any occured.
 func (s *Client) Connect() error {
 	addr, err := net.ResolveTCPAddr("tcp", s.Hostname)
@@ -61,13 +77,38 @@ func (s *Client) Connect() error {
 	}
 
 	s.socket = conn
-	err = s.initiateConnection()
+	if err := s.initiateConnection(); err != nil {
+		return err
+	}
+
+	s.sendCh = make(chan string)
+	s.closeSendCh = make(chan bool)
+	go s.messageListener()
 	return err
 }
 
 // RegisterEvent registers a new event
 func (s *Client) RegisterEvent(name string, back EventCallback) {
 	s.events[name] = append(s.events[name], back)
+}
+
+// SendMessage schedules a message to get sent.
+// This method will panic if the server is not connected.
+// There is no garantuee that the message is actually sent because
+// the channel might have been closed. In that case, Client.Err()
+// will return the latest error. Client.Err() might not be available
+// immediately.
+func (c *Client) SendMessage(message string) {
+	if c.Connected() {
+		c.sendCh <- message
+	} else {
+		panic("Server not connected")
+	}
+}
+
+// Err returns the last error that occured while sending a message.
+func (c *Client) Err() error {
+	return c.lastErr
 }
 
 // FireEvent fires the event to all appropriate handlers. If no message is
@@ -114,6 +155,7 @@ func (s *Client) Close() error {
 	if s.socket != nil {
 		err := s.socket.Close()
 		if err == nil {
+			s.closeSendCh <- true
 			s.socket = nil
 		}
 
