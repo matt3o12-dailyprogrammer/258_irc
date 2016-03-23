@@ -52,8 +52,9 @@ func NewClientShort(hostname, user string) *Client {
 	return NewClient(hostname, user, user, user)
 }
 
-func (c *Client) messageReceiver() {
+func (c *Client) messageReceiver(ready chan bool) {
 	scanner := bufio.NewScanner(c.socket)
+	ready <- true
 	for scanner.Scan() {
 		if t := strings.TrimSpace(scanner.Text()); t != "" {
 			c.FireEvent(t)
@@ -104,8 +105,10 @@ func (s *Client) Connect() error {
 	s.sendCh = make(chan string)
 	s.closeSendCh = make(chan bool)
 	s.RegisterEvent("PING", s.pingResponder)
+	ready := make(chan bool)
 	go s.messageListener()
-	go s.messageReceiver()
+	go s.messageReceiver(ready)
+	<-ready
 	return nil
 }
 
